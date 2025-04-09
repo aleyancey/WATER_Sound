@@ -2,7 +2,7 @@ import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QComboBox, QSlider, QPushButton,
-                           QGroupBox)
+                           QGroupBox, QDial)
 from PyQt6.QtCore import Qt, QTimer
 import numpy as np
 import sounddevice as sd
@@ -10,6 +10,7 @@ import librosa
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from PyQt6.QtGui import QFont
 
 class SoundMixer(QMainWindow):
     def __init__(self):
@@ -35,19 +36,30 @@ class SoundMixer(QMainWindow):
         # Create main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
+        main_layout = QVBoxLayout(main_widget)
         
-        # Create sound selection panel
-        self.create_sound_selection_panel(layout)
+        # Create top layout for waveform and sound selections
+        top_layout = QHBoxLayout()
         
-        # Create waveform display
-        self.create_waveform_display(layout)
+        # Create left sound selection panel
+        left_sound_panel = self.create_sound_selection_panel(0)
+        top_layout.addWidget(left_sound_panel)
+        
+        # Create waveform display (larger)
+        waveform_panel = self.create_waveform_display()
+        top_layout.addWidget(waveform_panel, stretch=2)  # Give waveform more space
+        
+        # Create right sound selection panel
+        right_sound_panel = self.create_sound_selection_panel(1)
+        top_layout.addWidget(right_sound_panel)
+        
+        main_layout.addLayout(top_layout)
         
         # Create effects panel
-        self.create_effects_panel(layout)
+        self.create_effects_panel(main_layout)
         
         # Create transport controls
-        self.create_transport_controls(layout)
+        self.create_transport_controls(main_layout)
         
         # Initialize audio stream
         self.stream = sd.OutputStream(
@@ -63,45 +75,56 @@ class SoundMixer(QMainWindow):
         self.waveform_timer.timeout.connect(self.update_waveform)
         self.waveform_timer.start(50)
 
-    def create_sound_selection_panel(self, parent_layout):
-        group = QGroupBox("Sound Selection")
+    def create_sound_selection_panel(self, slot):
+        group = QGroupBox(f"Sound {slot + 1}")
+        group.setMaximumWidth(100)  # Much narrower panel
         layout = QVBoxLayout()
+        layout.setSpacing(5)  # Reduce spacing between elements
+        layout.setContentsMargins(5, 5, 5, 5)  # Reduce margins
         
-        # Create 2 sound slots
-        for i in range(2):
-            slot_layout = QHBoxLayout()
-            
-            # Sound type selection
-            combo = QComboBox()
-            combo.addItems(["None", "Test Tone (440Hz)", "Wood", "Water", "Metal", "Concrete", 
-                          "Grass", "Leaves", "Heavy rain", "Glass", "Medium rain"])
-            combo.currentIndexChanged.connect(lambda idx, slot=i: self.sound_selected(idx, slot))
-            
-            # Volume slider
-            volume = QSlider(Qt.Orientation.Horizontal)
-            volume.setRange(0, 100)
-            volume.setValue(100)
-            volume.valueChanged.connect(lambda val, slot=i: self.volume_changed(val, slot))
-            
-            # Mute button
-            mute = QPushButton("Mute")
-            mute.setCheckable(True)
-            mute.toggled.connect(lambda checked, slot=i: self.mute_toggled(checked, slot))
-            
-            slot_layout.addWidget(combo)
-            slot_layout.addWidget(volume)
-            slot_layout.addWidget(mute)
-            layout.addLayout(slot_layout)
+        # Sound type selection (smaller combo box)
+        combo = QComboBox()
+        combo.setMaximumWidth(90)  # Even narrower combo box
+        combo.addItems(["None", "Test Tone (440Hz)", "Wood", "Water", "Metal", "Concrete", 
+                      "Grass", "Leaves", "Heavy rain", "Glass", "Medium rain"])
+        combo.currentIndexChanged.connect(lambda idx: self.sound_selected(idx, slot))
+        
+        # Create a horizontal layout for controls
+        controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(2)  # Minimal spacing between controls
+        
+        # Volume dial (smaller)
+        volume_dial = QDial()
+        volume_dial.setRange(0, 100)
+        volume_dial.setValue(100)
+        volume_dial.setNotchesVisible(True)
+        volume_dial.setWrapping(False)
+        volume_dial.setMaximumSize(40, 40)  # Much smaller dial
+        volume_dial.valueChanged.connect(lambda val: self.volume_changed(val, slot))
+        
+        # Mute button (smaller)
+        mute = QPushButton("🔇" if self.muted[slot] else "🔊")
+        mute.setCheckable(True)
+        mute.setMaximumSize(30, 30)  # Smaller button
+        mute.toggled.connect(lambda checked: self.mute_toggled(checked, slot))
+        
+        # Add controls to horizontal layout
+        controls_layout.addWidget(volume_dial)
+        controls_layout.addWidget(mute)
+        
+        # Add widgets to main layout
+        layout.addWidget(combo, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addLayout(controls_layout)
         
         group.setLayout(layout)
-        parent_layout.addWidget(group)
+        return group
         
-    def create_waveform_display(self, parent_layout):
+    def create_waveform_display(self):
         group = QGroupBox("Waveform Display")
         layout = QVBoxLayout()
         
-        # Create matplotlib figure
-        self.figure = Figure(figsize=(8, 2))
+        # Create matplotlib figure (larger)
+        self.figure = Figure(figsize=(20, 4))  # Even wider display
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
         self.ax.set_ylim(-1, 1)
@@ -111,15 +134,18 @@ class SoundMixer(QMainWindow):
         self.ax.set_facecolor('#f0f0f0')
         self.figure.patch.set_facecolor('#ffffff')
         
-        # Create initial line
+        # Add grid for better visibility
+        self.ax.grid(True, linestyle='-', alpha=0.3)
+        
+        # Create initial line with thicker width
         x = np.arange(self.buffer_size)
         y = np.zeros(self.buffer_size)
-        self.line, = self.ax.plot(x, y, color='#1f77b4', linewidth=1)
+        self.line, = self.ax.plot(x, y, color='#1f77b4', linewidth=2)
         
         layout.addWidget(self.canvas)
         group.setLayout(layout)
-        parent_layout.addWidget(group)
-        
+        return group
+
     def create_effects_panel(self, parent_layout):
         group = QGroupBox("Effects")
         layout = QHBoxLayout()
@@ -158,20 +184,31 @@ class SoundMixer(QMainWindow):
         parent_layout.addWidget(group)
 
     def create_transport_controls(self, parent_layout):
+        group = QGroupBox("Transport Controls")
         layout = QHBoxLayout()
+        layout.setSpacing(10)
         
-        self.play_button = QPushButton("Play")
-        self.play_button.setCheckable(True)
-        self.play_button.toggled.connect(self.play_toggled)
+        # Create a container for the play button to center it
+        play_container = QWidget()
+        play_layout = QHBoxLayout()
+        play_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.loop_button = QPushButton("Loop")
-        self.loop_button.setCheckable(True)
+        # Play button (larger, centered)
+        self.play_button = QPushButton("▶")
+        self.play_button.setFont(QFont("Arial", 20))
+        self.play_button.setFixedSize(60, 60)
+        self.play_button.clicked.connect(self.toggle_playback)
         
-        layout.addWidget(self.play_button)
-        layout.addWidget(self.loop_button)
+        # Add play button to its container
+        play_layout.addWidget(self.play_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        play_container.setLayout(play_layout)
         
-        parent_layout.addLayout(layout)
+        # Add the play container to the main layout
+        layout.addWidget(play_container, stretch=1)  # This will center the play button
         
+        group.setLayout(layout)
+        parent_layout.addWidget(group)
+
     def sound_selected(self, index, slot):
         if index == 0:  # None
             self.current_sounds[slot] = None
@@ -195,10 +232,24 @@ class SoundMixer(QMainWindow):
                     )[0]
         
     def volume_changed(self, value, slot):
-        self.volumes[slot] = value / 100.0
+        # Only update volume if not muted
+        if not self.muted[slot]:
+            self.volumes[slot] = value / 100.0
         
     def mute_toggled(self, checked, slot):
         self.muted[slot] = checked
+        # Update volume immediately when mute is toggled
+        if checked:
+            self.volumes[slot] = 0
+            # Update mute button text
+            self.sender().setText("🔇")
+        else:
+            # Restore previous volume
+            volume_dial = self.sender().parent().findChild(QDial)
+            if volume_dial:
+                self.volumes[slot] = volume_dial.value() / 100.0
+            # Update mute button text
+            self.sender().setText("🔊")
         
     def reset_delay_buffer(self):
         """Reset the delay buffer to zeros"""
@@ -211,9 +262,9 @@ class SoundMixer(QMainWindow):
         self.play_button.setChecked(False)
         self.reset_delay_buffer()
 
-    def play_toggled(self, checked):
+    def toggle_playback(self):
         try:
-            if checked:
+            if not self.is_playing:
                 self.reset_delay_buffer()
                 self.stream.start()
                 self.is_playing = True
@@ -239,6 +290,10 @@ class SoundMixer(QMainWindow):
             buffer = self.last_mixed_buffer[:self.buffer_size, 0]  # Use left channel
             if len(buffer) < self.buffer_size:
                 buffer = np.pad(buffer, (0, self.buffer_size - len(buffer)))
+            
+            # Scale the waveform for better visibility
+            if np.max(np.abs(buffer)) > 0:
+                buffer = buffer / np.max(np.abs(buffer))
             
             # Update the waveform display
             self.line.set_ydata(buffer)
@@ -289,7 +344,7 @@ class SoundMixer(QMainWindow):
 
     def audio_callback(self, outdata, frames, time, status):
         if status:
-            print(f"Audio callback status: {status}")
+            print(status)
             
         try:
             # Mix all active sounds
@@ -308,22 +363,15 @@ class SoundMixer(QMainWindow):
                         chunk = sound[pos:pos + frames]
                         if len(chunk) > 0:  # Only process if chunk is not empty
                             if len(chunk) < frames:
-                                if self.loop_button.isChecked():
-                                    # Loop the sound
-                                    repeats = (frames // len(chunk)) + 1
-                                    chunk = np.tile(chunk, repeats)[:frames]
-                                else:
-                                    # Pad with silence
-                                    chunk = np.pad(chunk, (0, frames - len(chunk)))
+                                # Always loop the sound for continuous playback
+                                repeats = (frames // len(chunk)) + 1
+                                chunk = np.tile(chunk, repeats)[:frames]
                             
                             # Apply volume and add to mix
                             mixed += np.column_stack((chunk, chunk)) * volume
                             
                             # Update position
-                            if self.loop_button.isChecked():
-                                self.current_positions[i] = (pos + frames) % len(sound)
-                            else:
-                                self.current_positions[i] = pos + frames
+                            self.current_positions[i] = (pos + frames) % len(sound)
             
             # Store the mixed buffer for visualization
             self.last_mixed_buffer = mixed.copy()
