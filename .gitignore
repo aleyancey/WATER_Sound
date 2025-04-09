@@ -21,8 +21,10 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
+.env
+.venv
 env/
+venv/
 ENV/
 
 # IDE
@@ -31,20 +33,25 @@ ENV/
 *.swp
 *.swo
 
-# Project specific
-data/processed/*
-!data/processed/.gitkeep
+# Data
+data/raw/
+data/processed/
+data/visualizations/
 *.wav
 *.mp3
-*.ogg
+*.flac
+*.npz
+
+# Models
+*.pth
+*.pt
+*.h5
+*.ckpt
 
 # Logs
 *.log
+logs/
 
-# Local configuration
-.env
-.env.local
-
-# OS specific
+# OS
 .DS_Store
 Thumbs.db 
