@@ -110,7 +110,7 @@ class SoundMixer(QMainWindow):
         self.ax.set_ylim(-1, 1)
         self.ax.set_xlim(0, self.buffer_size)
         self.ax.grid(True)
-        self.waveform_line, = self.ax.plot(np.zeros(self.buffer_size))
+        self.waveform_line, = self.ax.plot(np.arange(self.buffer_size), np.zeros(self.buffer_size))
         
         layout.addWidget(self.canvas)
         group.setLayout(layout)
@@ -252,6 +252,13 @@ class SoundMixer(QMainWindow):
         
     def update_waveform(self):
         if hasattr(self, 'waveform_data'):
+            # Ensure the waveform data matches the buffer size
+            if len(self.waveform_data) != self.buffer_size:
+                self.waveform_data = np.interp(
+                    np.linspace(0, len(self.waveform_data) - 1, self.buffer_size),
+                    np.arange(len(self.waveform_data)),
+                    self.waveform_data
+                )
             self.waveform_line.set_ydata(self.waveform_data)
             self.canvas.draw()
             
