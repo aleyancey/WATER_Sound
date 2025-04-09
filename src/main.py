@@ -25,7 +25,8 @@ class SoundMixer(QMainWindow):
         self.volumes = [1.0] * 4
         self.muted = [False] * 4
         self.soloed = [False] * 4
-        self.current_positions = [0] * 4  # Initialize current positions
+        self.current_positions = [0] * 4
+        self.last_mixed_buffer = None  # Store the last mixed buffer for visualization
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -53,6 +54,11 @@ class SoundMixer(QMainWindow):
             channels=2,
             callback=self.audio_callback
         )
+        
+        # Create timer for waveform updates
+        self.waveform_timer = QTimer()
+        self.waveform_timer.timeout.connect(self.update_waveform)
+        self.waveform_timer.start(50)  # Update every 50ms
         
     def create_sound_selection_panel(self, parent_layout):
         group = QGroupBox("Sound Selection")
@@ -101,6 +107,9 @@ class SoundMixer(QMainWindow):
         self.figure = Figure(figsize=(8, 2))
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
+        self.ax.set_ylim(-1, 1)
+        self.ax.set_xlim(0, self.buffer_size)
+        self.line, = self.ax.plot(np.zeros(self.buffer_size))
         
         layout.addWidget(self.canvas)
         group.setLayout(layout)
@@ -240,6 +249,12 @@ class SoundMixer(QMainWindow):
         # TODO: Implement sound generation
         pass
         
+    def update_waveform(self):
+        if self.last_mixed_buffer is not None:
+            # Update the waveform display with the latest mixed buffer
+            self.line.set_ydata(self.last_mixed_buffer[:, 0])  # Use left channel
+            self.canvas.draw()
+            
     def audio_callback(self, outdata, frames, time, status):
         if status:
             print(status)
@@ -270,6 +285,9 @@ class SoundMixer(QMainWindow):
                 
                 # Update position
                 self.current_positions[i] = (pos + frames) % len(sound)
+        
+        # Store the mixed buffer for visualization
+        self.last_mixed_buffer = mixed.copy()
         
         # Apply effects
         # TODO: Implement effects processing
