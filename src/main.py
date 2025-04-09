@@ -25,7 +25,8 @@ class SoundMixer(QMainWindow):
         self.volumes = [1.0] * 4
         self.muted = [False] * 4
         self.soloed = [False] * 4
-        self.current_positions = [0] * 4  # Initialize current positions
+        self.current_positions = [0] * 4
+        self.waveform_data = np.zeros(self.buffer_size)  # Buffer for waveform display
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -53,6 +54,11 @@ class SoundMixer(QMainWindow):
             channels=2,
             callback=self.audio_callback
         )
+        
+        # Setup waveform update timer
+        self.waveform_timer = QTimer()
+        self.waveform_timer.timeout.connect(self.update_waveform)
+        self.waveform_timer.start(50)  # Update every 50ms
         
     def create_sound_selection_panel(self, parent_layout):
         group = QGroupBox("Sound Selection")
@@ -101,6 +107,10 @@ class SoundMixer(QMainWindow):
         self.figure = Figure(figsize=(8, 2))
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
+        self.ax.set_ylim(-1, 1)
+        self.ax.set_xlim(0, self.buffer_size)
+        self.ax.grid(True)
+        self.waveform_line, = self.ax.plot(np.zeros(self.buffer_size))
         
         layout.addWidget(self.canvas)
         group.setLayout(layout)
@@ -240,6 +250,11 @@ class SoundMixer(QMainWindow):
         # TODO: Implement sound generation
         pass
         
+    def update_waveform(self):
+        if hasattr(self, 'waveform_data'):
+            self.waveform_line.set_ydata(self.waveform_data)
+            self.canvas.draw()
+            
     def audio_callback(self, outdata, frames, time, status):
         if status:
             print(status)
@@ -270,6 +285,9 @@ class SoundMixer(QMainWindow):
                 
                 # Update position
                 self.current_positions[i] = (pos + frames) % len(sound)
+        
+        # Store waveform data for display
+        self.waveform_data = mixed[:, 0]  # Use left channel for display
         
         # Apply effects
         # TODO: Implement effects processing
