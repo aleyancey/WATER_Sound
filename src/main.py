@@ -2,11 +2,10 @@ import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QComboBox, QSlider, QPushButton,
-                           QGroupBox, QFrame)
+                           QGroupBox)
 from PyQt6.QtCore import Qt, QTimer
 import numpy as np
 import sounddevice as sd
-import soundfile as sf
 import librosa
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -21,12 +20,17 @@ class SoundMixer(QMainWindow):
         # Initialize audio parameters
         self.sample_rate = 44100
         self.buffer_size = 1024
-        self.current_sounds = [None] * 4
-        self.volumes = [1.0] * 4
-        self.muted = [False] * 4
-        self.soloed = [False] * 4
-        self.current_positions = [0] * 4
-        self.last_mixed_buffer = None  # Store the last mixed buffer for visualization
+        self.current_sounds = [None] * 2
+        self.volumes = [1.0] * 2
+        self.muted = [False] * 2
+        self.current_positions = [0] * 2
+        self.last_mixed_buffer = None
+        self.is_playing = False
+        
+        # Initialize delay buffer (2 seconds max delay)
+        self.delay_buffer_size = self.sample_rate * 2
+        self.delay_buffer = np.zeros((self.delay_buffer_size, 2))
+        self.delay_position = 0
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -42,9 +46,6 @@ class SoundMixer(QMainWindow):
         # Create effects panel
         self.create_effects_panel(layout)
         
-        # Create characteristics panel
-        self.create_characteristics_panel(layout)
-        
         # Create transport controls
         self.create_transport_controls(layout)
         
@@ -52,25 +53,27 @@ class SoundMixer(QMainWindow):
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=2,
-            callback=self.audio_callback
+            blocksize=self.buffer_size,
+            callback=self.audio_callback,
+            finished_callback=self.stream_finished
         )
         
         # Create timer for waveform updates
         self.waveform_timer = QTimer()
         self.waveform_timer.timeout.connect(self.update_waveform)
-        self.waveform_timer.start(50)  # Update every 50ms
-        
+        self.waveform_timer.start(50)
+
     def create_sound_selection_panel(self, parent_layout):
         group = QGroupBox("Sound Selection")
         layout = QVBoxLayout()
         
-        # Create 4 sound slots
-        for i in range(4):
+        # Create 2 sound slots
+        for i in range(2):
             slot_layout = QHBoxLayout()
             
             # Sound type selection
             combo = QComboBox()
-            combo.addItems(["None", "Wood", "Water", "Metal", "Concrete", 
+            combo.addItems(["None", "Test Tone (440Hz)", "Wood", "Water", "Metal", "Concrete", 
                           "Grass", "Leaves", "Heavy rain", "Glass", "Medium rain"])
             combo.currentIndexChanged.connect(lambda idx, slot=i: self.sound_selected(idx, slot))
             
@@ -85,15 +88,9 @@ class SoundMixer(QMainWindow):
             mute.setCheckable(True)
             mute.toggled.connect(lambda checked, slot=i: self.mute_toggled(checked, slot))
             
-            # Solo button
-            solo = QPushButton("Solo")
-            solo.setCheckable(True)
-            solo.toggled.connect(lambda checked, slot=i: self.solo_toggled(checked, slot))
-            
             slot_layout.addWidget(combo)
             slot_layout.addWidget(volume)
             slot_layout.addWidget(mute)
-            slot_layout.addWidget(solo)
             layout.addLayout(slot_layout)
         
         group.setLayout(layout)
@@ -109,7 +106,15 @@ class SoundMixer(QMainWindow):
         self.ax = self.figure.add_subplot(111)
         self.ax.set_ylim(-1, 1)
         self.ax.set_xlim(0, self.buffer_size)
-        self.line, = self.ax.plot(np.zeros(self.buffer_size))
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.ax.set_facecolor('#f0f0f0')
+        self.figure.patch.set_facecolor('#ffffff')
+        
+        # Create initial line
+        x = np.arange(self.buffer_size)
+        y = np.zeros(self.buffer_size)
+        self.line, = self.ax.plot(x, y, color='#1f77b4', linewidth=1)
         
         layout.addWidget(self.canvas)
         group.setLayout(layout)
@@ -122,10 +127,25 @@ class SoundMixer(QMainWindow):
         # Delay controls
         delay_group = QGroupBox("Delay")
         delay_layout = QVBoxLayout()
+        
+        # Time slider (0-2000ms)
         self.delay_time = QSlider(Qt.Orientation.Horizontal)
+        self.delay_time.setRange(0, 2000)
+        self.delay_time.setValue(500)  # Default to 500ms
+        self.delay_time.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.delay_time.setTickInterval(500)
+        
+        # Feedback slider (0-100%)
         self.delay_feedback = QSlider(Qt.Orientation.Horizontal)
+        self.delay_feedback.setRange(0, 100)
+        self.delay_feedback.setValue(50)  # Default to 50%
+        
+        # Mix slider (0-100%)
         self.delay_mix = QSlider(Qt.Orientation.Horizontal)
-        delay_layout.addWidget(QLabel("Time"))
+        self.delay_mix.setRange(0, 100)
+        self.delay_mix.setValue(50)  # Default to 50%
+        
+        delay_layout.addWidget(QLabel("Time (ms)"))
         delay_layout.addWidget(self.delay_time)
         delay_layout.addWidget(QLabel("Feedback"))
         delay_layout.addWidget(self.delay_feedback)
@@ -133,66 +153,10 @@ class SoundMixer(QMainWindow):
         delay_layout.addWidget(self.delay_mix)
         delay_group.setLayout(delay_layout)
         
-        # Reverb controls
-        reverb_group = QGroupBox("Reverb")
-        reverb_layout = QVBoxLayout()
-        self.reverb_room = QSlider(Qt.Orientation.Horizontal)
-        self.reverb_damping = QSlider(Qt.Orientation.Horizontal)
-        self.reverb_mix = QSlider(Qt.Orientation.Horizontal)
-        reverb_layout.addWidget(QLabel("Room Size"))
-        reverb_layout.addWidget(self.reverb_room)
-        reverb_layout.addWidget(QLabel("Damping"))
-        reverb_layout.addWidget(self.reverb_damping)
-        reverb_layout.addWidget(QLabel("Mix"))
-        reverb_layout.addWidget(self.reverb_mix)
-        reverb_group.setLayout(reverb_layout)
-        
         layout.addWidget(delay_group)
-        layout.addWidget(reverb_group)
         group.setLayout(layout)
         parent_layout.addWidget(group)
-        
-    def create_characteristics_panel(self, parent_layout):
-        group = QGroupBox("Sound Characteristics")
-        layout = QHBoxLayout()
-        
-        # Tempo control
-        tempo_group = QGroupBox("Tempo")
-        tempo_layout = QVBoxLayout()
-        self.tempo_slider = QSlider(Qt.Orientation.Horizontal)
-        self.tempo_slider.setRange(40, 200)
-        self.tempo_slider.setValue(120)
-        tempo_layout.addWidget(self.tempo_slider)
-        tempo_group.setLayout(tempo_layout)
-        
-        # Loudness control
-        loudness_group = QGroupBox("Loudness")
-        loudness_layout = QVBoxLayout()
-        self.loudness_slider = QSlider(Qt.Orientation.Horizontal)
-        loudness_layout.addWidget(self.loudness_slider)
-        loudness_group.setLayout(loudness_layout)
-        
-        # Brightness control
-        brightness_group = QGroupBox("Brightness")
-        brightness_layout = QVBoxLayout()
-        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        brightness_layout.addWidget(self.brightness_slider)
-        brightness_group.setLayout(brightness_layout)
-        
-        # Noisiness control
-        noise_group = QGroupBox("Noisiness")
-        noise_layout = QVBoxLayout()
-        self.noise_slider = QSlider(Qt.Orientation.Horizontal)
-        noise_layout.addWidget(self.noise_slider)
-        noise_group.setLayout(noise_layout)
-        
-        layout.addWidget(tempo_group)
-        layout.addWidget(loudness_group)
-        layout.addWidget(brightness_group)
-        layout.addWidget(noise_group)
-        group.setLayout(layout)
-        parent_layout.addWidget(group)
-        
+
     def create_transport_controls(self, parent_layout):
         layout = QHBoxLayout()
         
@@ -203,100 +167,181 @@ class SoundMixer(QMainWindow):
         self.loop_button = QPushButton("Loop")
         self.loop_button.setCheckable(True)
         
-        self.generate_button = QPushButton("Generate")
-        self.generate_button.clicked.connect(self.generate_soundscape)
-        
         layout.addWidget(self.play_button)
         layout.addWidget(self.loop_button)
-        layout.addWidget(self.generate_button)
         
         parent_layout.addLayout(layout)
         
     def sound_selected(self, index, slot):
-        if index == 0:
+        if index == 0:  # None
             self.current_sounds[slot] = None
+            return
+            
+        if index == 1:  # Test Tone
+            # Generate a 440Hz sine wave
+            duration = 5  # seconds
+            t = np.linspace(0, duration, int(self.sample_rate * duration))
+            self.current_sounds[slot] = 0.5 * np.sin(2 * np.pi * 440 * t)
         else:
             # Load the selected sound
             sound_type = self.sender().currentText().lower().replace(" ", "_")
-            try:
-                sound_path = f"data/raw/rain_sounds/{sound_type}/"
-                if os.path.exists(sound_path):
-                    files = [f for f in os.listdir(sound_path) if f.endswith(('.wav', '.mp3'))]
-                    if files:
-                        self.current_sounds[slot] = librosa.load(
-                            os.path.join(sound_path, files[0]),
-                            sr=self.sample_rate
-                        )[0]
-            except Exception as e:
-                print(f"Error loading sound: {e}")
-                
+            sound_path = f"data/raw/rain_sounds/{sound_type}/"
+            if os.path.exists(sound_path):
+                files = [f for f in os.listdir(sound_path) if f.endswith(('.wav', '.mp3'))]
+                if files:
+                    self.current_sounds[slot] = librosa.load(
+                        os.path.join(sound_path, files[0]),
+                        sr=self.sample_rate
+                    )[0]
+        
     def volume_changed(self, value, slot):
         self.volumes[slot] = value / 100.0
         
     def mute_toggled(self, checked, slot):
         self.muted[slot] = checked
         
-    def solo_toggled(self, checked, slot):
-        self.soloed[slot] = checked
-        
+    def reset_delay_buffer(self):
+        """Reset the delay buffer to zeros"""
+        self.delay_buffer.fill(0)
+        self.delay_position = 0
+
+    def stream_finished(self):
+        """Callback when stream is finished"""
+        self.is_playing = False
+        self.play_button.setChecked(False)
+        self.reset_delay_buffer()
+
     def play_toggled(self, checked):
-        if checked:
-            self.stream.start()
-        else:
+        try:
+            if checked:
+                self.reset_delay_buffer()
+                self.stream.start()
+                self.is_playing = True
+            else:
+                self.stream.stop()
+                self.is_playing = False
+                self.reset_delay_buffer()
+        except sd.PortAudioError as e:
+            print(f"Audio stream error: {e}")
+            self.play_button.setChecked(False)
+            self.is_playing = False
+
+    def closeEvent(self, event):
+        """Clean up resources when window is closed"""
+        if self.stream is not None:
             self.stream.stop()
-            
-    def generate_soundscape(self):
-        # TODO: Implement sound generation
-        pass
-        
+            self.stream.close()
+        event.accept()
+
     def update_waveform(self):
         if self.last_mixed_buffer is not None:
-            # Update the waveform display with the latest mixed buffer
-            self.line.set_ydata(self.last_mixed_buffer[:, 0])  # Use left channel
+            # Ensure the buffer size matches
+            buffer = self.last_mixed_buffer[:self.buffer_size, 0]  # Use left channel
+            if len(buffer) < self.buffer_size:
+                buffer = np.pad(buffer, (0, self.buffer_size - len(buffer)))
+            
+            # Update the waveform display
+            self.line.set_ydata(buffer)
             self.canvas.draw()
             
+    def apply_delay(self, audio):
+        if self.delay_mix.value() == 0 or not self.is_playing:
+            return audio
+            
+        # Calculate delay parameters
+        delay_samples = int(self.delay_time.value() * self.sample_rate / 1000)
+        feedback = self.delay_feedback.value() / 100.0
+        mix = self.delay_mix.value() / 100.0
+        
+        # Process each channel
+        output = np.zeros_like(audio)
+        for channel in range(2):
+            # Get current input
+            input_signal = audio[:, channel]
+            
+            # Calculate read position (current position - delay)
+            read_pos = (self.delay_position - delay_samples) % self.delay_buffer_size
+            
+            # Get delayed signal
+            delayed = np.zeros_like(input_signal)
+            for i in range(len(input_signal)):
+                pos = (read_pos + i) % self.delay_buffer_size
+                delayed[i] = self.delay_buffer[pos, channel]
+            
+            # Mix input with feedback
+            output[:, channel] = input_signal + delayed * feedback
+            
+            # Update delay buffer
+            for i in range(len(input_signal)):
+                pos = (self.delay_position + i) % self.delay_buffer_size
+                self.delay_buffer[pos, channel] = output[i, channel]
+            
+        # Update buffer position
+        self.delay_position = (self.delay_position + len(audio)) % self.delay_buffer_size
+        
+        # Normalize to prevent clipping
+        max_val = np.max(np.abs(output))
+        if max_val > 0:
+            output = output / max_val
+        
+        # Mix with original signal
+        return audio * (1 - mix) + output * mix
+
     def audio_callback(self, outdata, frames, time, status):
         if status:
-            print(status)
+            print(f"Audio callback status: {status}")
             
-        # Mix all active sounds
-        mixed = np.zeros((frames, 2))
-        
-        for i, sound in enumerate(self.current_sounds):
-            if sound is not None and not self.muted[i]:
-                # Apply volume
-                volume = self.volumes[i] if not self.soloed[i] else 1.0
-                
-                # Get the current position in the sound
-                pos = self.current_positions[i]
-                
-                # Get the next chunk of audio
-                chunk = sound[pos:pos + frames]
-                if len(chunk) < frames:
-                    if self.loop_button.isChecked():
-                        # Loop the sound
-                        chunk = np.tile(chunk, (frames // len(chunk)) + 1)[:frames]
-                    else:
-                        # Pad with silence
-                        chunk = np.pad(chunk, (0, frames - len(chunk)))
-                
-                # Apply volume and add to mix
-                mixed += np.column_stack((chunk, chunk)) * volume
-                
-                # Update position
-                self.current_positions[i] = (pos + frames) % len(sound)
-        
-        # Store the mixed buffer for visualization
-        self.last_mixed_buffer = mixed.copy()
-        
-        # Apply effects
-        # TODO: Implement effects processing
-        
-        # Normalize the output
-        if np.max(np.abs(mixed)) > 0:
-            mixed = mixed / np.max(np.abs(mixed))
+        try:
+            # Mix all active sounds
+            mixed = np.zeros((frames, 2))
             
-        outdata[:] = mixed
+            for i, sound in enumerate(self.current_sounds):
+                if sound is not None and not self.muted[i]:
+                    # Apply volume
+                    volume = self.volumes[i]
+                    
+                    # Get the current position in the sound
+                    pos = self.current_positions[i]
+                    
+                    # Get the next chunk of audio
+                    if pos < len(sound):
+                        chunk = sound[pos:pos + frames]
+                        if len(chunk) > 0:  # Only process if chunk is not empty
+                            if len(chunk) < frames:
+                                if self.loop_button.isChecked():
+                                    # Loop the sound
+                                    repeats = (frames // len(chunk)) + 1
+                                    chunk = np.tile(chunk, repeats)[:frames]
+                                else:
+                                    # Pad with silence
+                                    chunk = np.pad(chunk, (0, frames - len(chunk)))
+                            
+                            # Apply volume and add to mix
+                            mixed += np.column_stack((chunk, chunk)) * volume
+                            
+                            # Update position
+                            if self.loop_button.isChecked():
+                                self.current_positions[i] = (pos + frames) % len(sound)
+                            else:
+                                self.current_positions[i] = pos + frames
+            
+            # Store the mixed buffer for visualization
+            self.last_mixed_buffer = mixed.copy()
+            
+            # Apply delay effect
+            if self.is_playing:
+                mixed = self.apply_delay(mixed)
+            
+            # Normalize the output
+            max_val = np.max(np.abs(mixed))
+            if max_val > 0:
+                mixed = mixed / max_val
+                
+            outdata[:] = mixed
+            
+        except Exception as e:
+            print(f"Error in audio callback: {e}")
+            outdata.fill(0)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
