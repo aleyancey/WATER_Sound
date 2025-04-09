@@ -20,4 +20,6 @@ pandas>=2.0.0
 
 # Audio processing
 tqdm>=4.65.0
-soundfile>=0.12.1 
+soundfile>=0.12.1
+PyQt6>=6.4.0
+sounddevice>=0.4.6 
