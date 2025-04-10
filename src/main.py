@@ -467,15 +467,7 @@ class SoundMixer(QMainWindow):
                 self.delay_buffer[pos, channel] = delayed_signal[i]
             
             # Apply mix parameter correctly
-            if mix == 0:
-                # At 0% mix, return only the original signal
-                output[:, channel] = input_signal
-            elif mix == 1:
-                # At 100% mix, return only the delayed signal
-                output[:, channel] = delayed_signal
-            else:
-                # For values between 0 and 1, mix the signals
-                output[:, channel] = input_signal * (1 - mix) + delayed_signal * mix
+            output[:, channel] = input_signal * (1 - mix) + delayed_signal * mix
         
         # Update buffer position
         self.delay_position = (self.delay_position + len(audio)) % self.delay_buffer_size
@@ -517,18 +509,11 @@ class SoundMixer(QMainWindow):
             # Normalize and apply feedback
             channel_output = channel_output / len(delay_times)
             feedback = 0.3 * (1 - damping)  # Reduced feedback
-            reverbed_signal = input_signal + channel_output * feedback
+            channel_output = input_signal + channel_output * feedback
             
-            # Apply mix parameter correctly
-            if mix == 0:
-                # At 0% mix, return only the original signal
-                output[:, channel] = input_signal
-            elif mix == 1:
-                # At 100% mix, return only the reverbed signal
-                output[:, channel] = reverbed_signal
-            else:
-                # For values between 0 and 1, mix the signals
-                output[:, channel] = input_signal * (1 - mix) + reverbed_signal * mix
+            # Final mix with reduced wet signal
+            wet_mix = mix * 0.7  # Reduce wet signal to prevent volume increase
+            output[:, channel] = input_signal * (1 - wet_mix) + channel_output * wet_mix
         
         # Normalize to prevent clipping while preserving original volume
         max_val = np.max(np.abs(output))
