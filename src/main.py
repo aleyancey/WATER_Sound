@@ -79,6 +79,15 @@ class SoundMixer(QMainWindow):
         # Pre-load sound file paths
         self.sound_file_paths = {}
         self.preload_sound_paths()
+        # Add custom sound: 'rain on wood'
+        custom_wood_path = os.path.join("data", "raw", "rain_sounds", "wood", "rain campshedding 5cm under water contactmic 140709_0294.wav")
+        if os.path.exists(custom_wood_path):
+            self.sound_file_paths["rain on wood"] = custom_wood_path
+        # Add custom sound: 'rainforest'
+        rainforest_path = os.path.join("data", "processed", "sound_samples", "gentle-creek-in-rain-forest-with-cicadas.wav")
+        if os.path.exists(rainforest_path):
+            self.sound_file_paths["rainforest"] = rainforest_path
+
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -145,7 +154,9 @@ class SoundMixer(QMainWindow):
         # Sound type selection
         combo = QComboBox()
         combo.setMaximumWidth(90)
-        combo.addItems(["None", "Test Tone"] + list(self.sound_file_paths.keys()))
+        # Ensure 'rain on wood' is always present if available
+        sound_options = ["None", "Test Tone"] + sorted(self.sound_file_paths.keys(), key=lambda x: x.lower())
+        combo.addItems(sound_options)
         combo.currentIndexChanged.connect(lambda idx: self.sound_selected(slot, combo.currentText()))
         
         # Create a horizontal layout for controls
